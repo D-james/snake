@@ -1,74 +1,94 @@
 "use client";
-
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 
 export default function SnakeGame() {
   const GRID_SIZE = 20;
   const CELL_SIZE = 20;
-  
-  const [snake, setSnake] = useState([{ x: 10, y: 10 }]);
-  const [food, setFood] = useState({ x: 5, y: 5 });
-  const [direction, setDirection] = useState("RIGHT");
+  const [playerName, setPlayerName] = useState("");
+  const [gameStarted, setGameStarted] = useState(false);
   const [gameOver, setGameOver] = useState(false);
   const [score, setScore] = useState(0);
-  const [gameStarted, setGameStarted] = useState(false);
+  const [error, setError] = useState("");
+  const [snake, setSnake] = useState([{ x: 10, y: 10 }]);
+  const [food, setFood] = useState({ x: 5, y: 5 });
+  const directionRef = useRef("RIGHT");
+  const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const generateFood = useCallback(() => {
     const newFood = {
       x: Math.floor(Math.random() * GRID_SIZE),
-      y: Math.floor(Math.random() * GRID_SIZE),
+      y: Math.floor(Math.random() * GRID_SIZE)
     };
+    if (snake.some(segment => segment.x === newFood.x && segment.y === newFood.y)) {
+      generateFood();
+      return;
+    }
     setFood(newFood);
-  }, []);
+  }, [snake]);
 
   const resetGame = useCallback(() => {
     setSnake([{ x: 10, y: 10 }]);
-    setDirection("RIGHT");
+    directionRef.current = "RIGHT";
     setGameOver(false);
     setScore(0);
     generateFood();
-    setGameStarted(true);
   }, [generateFood]);
 
-  const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    if (!gameStarted && !gameOver) {
-      setGameStarted(true);
+  const handleStartGame = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!playerName.trim()) {
+      setError("Please enter your name");
+      return;
     }
-    
+    setGameStarted(true);
+    setError("");
+    generateFood();
+  };
+
+  const saveScore = async () => {
+    try {
+      const response = await fetch("/api/saveScore", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          player_name: playerName,
+          score: score
+        }),
+      });
+      if (!response.ok) throw new Error("Failed to save score");
+    } catch (error) {
+      console.error("Error saving score:", error);
+    }
+  };
+
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
     switch (e.key) {
       case "ArrowUp":
-        if (direction !== "DOWN") setDirection("UP");
+        if (directionRef.current !== "DOWN") directionRef.current = "UP";
         break;
       case "ArrowDown":
-        if (direction !== "UP") setDirection("DOWN");
+        if (directionRef.current !== "UP") directionRef.current = "DOWN";
         break;
       case "ArrowLeft":
-        if (direction !== "RIGHT") setDirection("LEFT");
+        if (directionRef.current !== "RIGHT") directionRef.current = "LEFT";
         break;
       case "ArrowRight":
-        if (direction !== "LEFT") setDirection("RIGHT");
-        break;
-      case " ":
-        if (gameOver) resetGame();
+        if (directionRef.current !== "LEFT") directionRef.current = "RIGHT";
         break;
     }
-  }, [direction, gameOver, gameStarted, resetGame]);
-
-  useEffect(() => {
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [handleKeyDown]);
+  }, []);
 
   useEffect(() => {
     if (!gameStarted || gameOver) return;
 
-    const moveSnake = () => {
+    document.addEventListener("keydown", handleKeyDown);
+    const gameLoop = setInterval(() => {
       setSnake(prevSnake => {
         const head = { ...prevSnake[0] };
 
-        switch (direction) {
+        switch (directionRef.current) {
           case "UP":
             head.y -= 1;
             break;
@@ -83,24 +103,21 @@ export default function SnakeGame() {
             break;
         }
 
-        // Check wall collision
-        if (
+        const isGameOver = 
           head.x < 0 || head.x >= GRID_SIZE ||
-          head.y < 0 || head.y >= GRID_SIZE
-        ) {
-          setGameOver(true);
-          return prevSnake;
-        }
+          head.y < 0 || head.y >= GRID_SIZE ||
+          prevSnake.some(segment => segment.x === head.x && segment.y === head.y);
 
-        // Check self collision
-        if (prevSnake.some(segment => segment.x === head.x && segment.y === head.y)) {
+        if (isGameOver) {
           setGameOver(true);
+          if (!gameOver) {
+            saveScore();
+          }
           return prevSnake;
         }
 
         const newSnake = [head, ...prevSnake];
         
-        // Check food collision
         if (head.x === food.x && head.y === food.y) {
           setScore(prev => prev + 10);
           generateFood();
@@ -110,72 +127,89 @@ export default function SnakeGame() {
 
         return newSnake;
       });
-    };
+    }, 150);
 
-    const gameLoop = setInterval(moveSnake, 150);
-    return () => clearInterval(gameLoop);
-  }, [direction, food, gameOver, gameStarted, generateFood]);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      clearInterval(gameLoop);
+    };
+  }, [gameStarted, gameOver, food, generateFood, handleKeyDown]);
+
+  useEffect(() => {
+    if (!gameStarted || !canvasRef.current) return;
+
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    ctx.fillStyle = 'red';
+    ctx.fillRect(
+      food.x * CELL_SIZE,
+      food.y * CELL_SIZE,
+      CELL_SIZE,
+      CELL_SIZE
+    );
+
+    snake.forEach((segment, index) => {
+      ctx.fillStyle = index === 0 ? 'darkgreen' : 'green';
+      ctx.fillRect(
+        segment.x * CELL_SIZE,
+        segment.y * CELL_SIZE,
+        CELL_SIZE,
+        CELL_SIZE
+      );
+    });
+  }, [snake, food, gameStarted, gameOver]);
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100">
-      <h1 className="text-3xl font-bold mb-4">贪吃蛇游戏</h1>
-      <div className="mb-4 text-xl">分数: {score}</div>
-      
-      <div 
-        className="relative bg-white border border-gray-300"
-        style={{ 
-          width: GRID_SIZE * CELL_SIZE, 
-          height: GRID_SIZE * CELL_SIZE 
-        }}
-      >
-        {!gameStarted && !gameOver && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 text-white">
-            <p>按任意方向键开始游戏</p>
-          </div>
-        )}
-        
-        {gameOver && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-black bg-opacity-50 text-white">
-            <p className="text-2xl mb-4">游戏结束!</p>
-            <p className="mb-4">最终分数: {score}</p>
-            <button 
-              className="px-4 py-2 bg-blue-500 rounded hover:bg-blue-600"
-              onClick={resetGame}
-            >
-              重新开始
-            </button>
-          </div>
-        )}
-
-        {/* Food */}
-        <div 
-          className="absolute bg-red-500 rounded-full"
-          style={{
-            width: CELL_SIZE - 2,
-            height: CELL_SIZE - 2,
-            left: food.x * CELL_SIZE + 1,
-            top: food.y * CELL_SIZE + 1,
-          }}
-        />
-
-        {/* Snake */}
-        {snake.map((segment, index) => (
-          <div
-            key={index}
-            className={`absolute ${index === 0 ? 'bg-green-700' : 'bg-green-500'}`}
-            style={{
-              width: CELL_SIZE - 2,
-              height: CELL_SIZE - 2,
-              left: segment.x * CELL_SIZE + 1,
-              top: segment.y * CELL_SIZE + 1,
-            }}
+    <div className="flex flex-col items-center justify-center min-h-screen p-4">
+      {!gameStarted ? (
+        <form onSubmit={handleStartGame} className="space-y-4 w-full max-w-md">
+          <input
+            type="text"
+            value={playerName}
+            onChange={(e) => setPlayerName(e.target.value)}
+            placeholder="Enter your name"
+            className="w-full px-4 py-2 border rounded"
+            required
           />
-        ))}
-      </div>
-
-      <div className="mt-4 text-gray-600">
-        使用方向键控制，空格键重新开始
-      </div>
+          {error && <p className="text-red-500">{error}</p>}
+          <button
+            type="submit"
+            className="w-full px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+          >
+            Start Game
+          </button>
+        </form>
+      ) : (
+        <div className="text-center space-y-4">
+          <h1 className="text-2xl font-bold">Player: {playerName}</h1>
+          <p className="text-xl">Score: {score}</p>
+          <canvas
+            ref={canvasRef}
+            width={GRID_SIZE * CELL_SIZE}
+            height={GRID_SIZE * CELL_SIZE}
+            className="border border-gray-300 bg-white"
+          />
+          {gameOver && (
+            <div className="mt-4 p-4 bg-red-100 text-red-800 rounded flex flex-col items-center">
+              <p className="text-2xl mb-2">Game Over!</p>
+              <p className="mb-4">Final Score: {score}</p>
+              <button
+                onClick={() => {
+                  resetGame();
+                  setGameStarted(true);
+                }}
+                className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+              >
+                Play Again
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
